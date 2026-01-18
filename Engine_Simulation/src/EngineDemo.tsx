@@ -3,6 +3,8 @@ import { EngineSim, type EngineConfig, type Stroke } from "./EngineSim";
 
 const TIME_STEPS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 5, 10];
 const BASE_SIM_SPEED = 0.25;
+const SPEED_SCALE_KMH = 0.045 * 1.609; // rpm to km/h-ish
+const MAX_SPEED_KMH = 220;
 
 type AudioState =
     | { kind: "off" }
@@ -30,6 +32,9 @@ export default function EngineDemo() {
     useEffect(() => {
         audioRef.current = audio;
     }, [audio]);
+
+    const [dashData, setDashData] = useState({ rpm: 0, speed: 0 });
+    const [pedalVisual, setPedalVisual] = useState({ throttle: 0, brake: 0 });
 
     const defaultSpeedIndex = TIME_STEPS.indexOf(1);
     const initialSpeedIndex = defaultSpeedIndex === -1 ? 3 : defaultSpeedIndex;
@@ -202,6 +207,21 @@ export default function EngineDemo() {
             drawCutaway(cutRef.current, sim);
             drawTopDown(topRef.current, sim);
 
+            const kmh = Math.min(MAX_SPEED_KMH, sim.rpm * SPEED_SCALE_KMH);
+            setDashData((prev) =>
+                Math.abs(prev.rpm - sim.rpm) > 2 || Math.abs(prev.speed - kmh) > 1
+                    ? { rpm: sim.rpm, speed: kmh }
+                    : prev
+            );
+            setPedalVisual((prev) => {
+                const throttleLevel = sim.throttle;
+                const brakeLevel = sim.brake;
+                if (Math.abs(prev.throttle - throttleLevel) > 0.01 || Math.abs(prev.brake - brakeLevel) > 0.01) {
+                    return { throttle: throttleLevel, brake: brakeLevel };
+                }
+                return prev;
+            });
+
             raf = requestAnimationFrame(tick);
         };
 
@@ -250,10 +270,7 @@ export default function EngineDemo() {
             <div style={styles.header}>
                 <div>
                     <div style={styles.title}>V6 Engine Browser Sim (2D)</div>
-                    <div style={styles.sub}>
-                        Hold <b>Space</b> or use the pedals in the bottom-left corner. Use the <b>{"<"}</b> and{" "}
-                        <b>{">"}</b> keys to change the time speed. Two views: cutaway + top-down.
-                    </div>
+                    <div style={styles.sub}>Dual-view 2D visualization with live audio.</div>
                 </div>
 
                 <div style={styles.controls}>
@@ -267,6 +284,15 @@ export default function EngineDemo() {
                         </button>
                     )}
                 </div>
+            </div>
+
+            <div style={styles.dashboardWrap}>
+                <Dashboard
+                    rpm={dashData.rpm}
+                    speed={dashData.speed}
+                    redline={cfg.redlineRpm}
+                    maxSpeed={MAX_SPEED_KMH}
+                />
             </div>
 
             <div style={styles.grid}>
@@ -300,9 +326,11 @@ export default function EngineDemo() {
                     <div style={styles.pedalBoardLabel}>Pedals</div>
                     <div style={styles.pedalRow}>
                         <div style={styles.pedalUnit}>
-                            <div style={styles.pedalHinge} />
                             <div
-                                style={{ ...styles.pedalBase, ...(holding ? styles.pedalBasePressed : null) }}
+                                style={{
+                                    ...styles.pedalBase,
+                                    transform: `translateY(${pedalVisual.throttle * 6}px)`,
+                                }}
                                 role="button"
                                 tabIndex={0}
                                 aria-pressed={holding}
@@ -314,10 +342,11 @@ export default function EngineDemo() {
                                 onPointerCancel={() => setHolding(false)}
                                 onPointerLeave={() => setHolding(false)}
                             >
+                                <div style={styles.pedalMetal} />
                                 <div
                                     style={{
                                         ...styles.pedalSurface,
-                                        ...(holding ? styles.pedalSurfacePressed : null),
+                                        transform: `translateY(${pedalVisual.throttle * 18}px)`,
                                     }}
                                 >
                                     <span style={styles.pedalText}>Gas</span>
@@ -326,9 +355,11 @@ export default function EngineDemo() {
                         </div>
 
                         <div style={styles.pedalUnit}>
-                            <div style={styles.pedalHinge} />
                             <div
-                                style={{ ...styles.pedalBase, ...(braking ? styles.pedalBasePressed : null) }}
+                                style={{
+                                    ...styles.pedalBase,
+                                    transform: `translateY(${pedalVisual.brake * 6}px)`,
+                                }}
                                 role="button"
                                 tabIndex={0}
                                 aria-pressed={braking}
@@ -340,11 +371,12 @@ export default function EngineDemo() {
                                 onPointerCancel={() => setBraking(false)}
                                 onPointerLeave={() => setBraking(false)}
                             >
+                                <div style={{ ...styles.pedalMetal, ...styles.pedalMetalBrake }} />
                                 <div
                                     style={{
                                         ...styles.pedalSurface,
-                                        ...(braking ? styles.pedalSurfacePressed : null),
                                         ...styles.pedalSurfaceBrake,
+                                        transform: `translateY(${pedalVisual.brake * 18}px)`,
                                     }}
                                 >
                                     <span style={styles.pedalText}>Brake</span>
@@ -354,8 +386,123 @@ export default function EngineDemo() {
                     </div>
                 </div>
             </div>
+
+            <div style={styles.infoOverlay}>
+                <div>Hold Space or press the gas pedal to rev. Hold Shift or press the brake pedal to load it.</div>
+                <div>Use {"<"}/{">"} keys to slow down or speed up time.</div>
+                <div>Start audio for the diesel growl, dashboards track live RPM and km/h.</div>
+            </div>
         </div>
     );
+}
+
+type DashboardProps = {
+    rpm: number;
+    speed: number;
+    redline: number;
+    maxSpeed: number;
+};
+
+type GaugeProps = {
+    label: string;
+    value: number;
+    max: number;
+    unit: string;
+    color: string;
+};
+
+function Dashboard({ rpm, speed, redline, maxSpeed }: DashboardProps) {
+    return (
+        <div style={styles.dashboard}>
+            <Gauge label="Speed" value={speed} max={maxSpeed} unit="km/h" color="#4dd5ff" />
+            <Gauge label="RPM" value={rpm} max={redline} unit="rpm" color="#ffb347" />
+        </div>
+    );
+}
+
+function Gauge({ label, value, max, unit, color }: GaugeProps) {
+    const pct = Math.max(0, Math.min(1, value / max));
+    const cx = 130;
+    const cy = 150;
+    const radius = 110;
+    const startAngle = Math.PI;
+    const endAngle = Math.PI * 2;
+    const ticks = 8;
+
+    const arcPath = describeArc(cx, cy, radius, startAngle, endAngle);
+    const pointerAngle = startAngle + pct * (endAngle - startAngle);
+    const pointerInner = polar(cx, cy, radius * 0.15, pointerAngle);
+    const pointerOuter = polar(cx, cy, radius * 0.95, pointerAngle);
+    const tickElements = [];
+    for (let i = 0; i <= ticks; i++) {
+        const t = i / ticks;
+        const angle = startAngle + t * (endAngle - startAngle);
+        const outer = polar(cx, cy, radius, angle);
+        const inner = polar(cx, cy, radius - 14, angle);
+        const labelPos = polar(cx, cy, radius - 32, angle);
+        const tickValue = Math.round(t * max);
+        tickElements.push(
+            <g key={i}>
+                <line x1={outer.x} y1={outer.y} x2={inner.x} y2={inner.y} stroke="rgba(255,255,255,0.4)" strokeWidth={2} />
+                <text
+                    x={labelPos.x}
+                    y={labelPos.y}
+                    fill="rgba(255,255,255,0.8)"
+                    fontSize={10}
+                    textAnchor="middle"
+                    alignmentBaseline="middle"
+                >
+                    {tickValue}
+                </text>
+            </g>
+        );
+    }
+
+    return (
+        <div style={styles.gauge}>
+            <div style={styles.gaugeLabel}>{label}</div>
+            <svg width={280} height={210}>
+                <path d={arcPath} stroke="rgba(255,255,255,0.12)" strokeWidth={12} fill="none" strokeLinecap="round" />
+                <path
+                    d={describeArc(cx, cy, radius, startAngle, pointerAngle)}
+                    stroke={color}
+                    strokeWidth={12}
+                    fill="none"
+                    strokeLinecap="round"
+                />
+                {tickElements}
+                <line
+                    x1={pointerInner.x}
+                    y1={pointerInner.y}
+                    x2={pointerOuter.x}
+                    y2={pointerOuter.y}
+                    stroke={color}
+                    strokeWidth={4}
+                    strokeLinecap="round"
+                />
+                <circle cx={cx} cy={cy} r={6} fill="#fff" />
+            </svg>
+            <div style={styles.gaugeValue}>{Math.round(value)}</div>
+            <div style={styles.gaugeUnit}>{unit.toUpperCase()}</div>
+        </div>
+    );
+}
+
+function polar(cx: number, cy: number, r: number, angle: number) {
+    return {
+        x: cx + r * Math.cos(angle),
+        y: cy + r * Math.sin(angle),
+    };
+}
+
+function describeArc(cx: number, cy: number, r: number, startAngle: number, endAngle: number) {
+    const start = polar(cx, cy, r, startAngle);
+    const end = polar(cx, cy, r, endAngle);
+    const largeArcFlag = Math.abs(endAngle - startAngle) <= Math.PI ? 0 : 1;
+    const sweepFlag = endAngle > startAngle ? 1 : 0;
+    return `M ${start.x.toFixed(2)} ${start.y.toFixed(2)} A ${r} ${r} 0 ${largeArcFlag} ${sweepFlag} ${end.x.toFixed(
+        2
+    )} ${end.y.toFixed(2)}`;
 }
 
 // -------------------- Drawing --------------------
@@ -389,12 +536,6 @@ function drawCutaway(canvas: HTMLCanvasElement | null, sim: EngineSim) {
     const boreH = H * 0.55;
     const topY = 50;
     const baseY = topY + boreH;
-
-    // HUD
-    ctx.font = "14px system-ui, sans-serif";
-    ctx.fillStyle = "#111";
-    ctx.fillText(`RPM: ${Math.round(sim.rpm)}`, pad, 24);
-    ctx.fillText(`Throttle: ${Math.round(sim.throttle * 100)}%`, pad + 140, 24);
 
     for (let i = 0; i < 6; i++) {
         const x = pad + i * (boreW + 10);
@@ -452,7 +593,6 @@ function drawCutaway(canvas: HTMLCanvasElement | null, sim: EngineSim) {
     ctx.beginPath();
     ctx.arc(cx, cy, 18, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.fillText(`Brake: ${Math.round((sim as any).brake * 100)}%`, pad + 300, 24);
 
     const a = sim.crankAngle360;
     ctx.beginPath();
@@ -634,10 +774,10 @@ function drawFlowHint(ctx: CanvasRenderingContext2D, x: number, y: number, r: nu
 // -------------------- Styles --------------------
 
 const styles: Record<string, React.CSSProperties> = {
-    page: { padding: 18, fontFamily: "system-ui, sans-serif", color: "#111" },
+    page: { padding: 18, fontFamily: "system-ui, sans-serif", color: "#111", position: "relative", minHeight: "100vh" },
     header: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, marginBottom: 14 },
     title: { fontSize: 18, fontWeight: 700 },
-    sub: { fontSize: 13, opacity: 0.85 },
+    sub: { fontSize: 12, opacity: 0.7, letterSpacing: 0.3 },
     controls: { display: "flex", gap: 10, alignItems: "center" },
     button: {
         border: "1px solid #111",
@@ -650,10 +790,27 @@ const styles: Record<string, React.CSSProperties> = {
     },
     buttonOn: { background: "#111", color: "#fff", borderColor: "#111" },
     grid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 },
+    dashboardWrap: { margin: "20px auto", maxWidth: 700 },
     panel: { border: "1px solid #ddd", borderRadius: 12, padding: 12, background: "#fafafa" },
     panelTitle: { fontWeight: 700, marginBottom: 8 },
     canvas: { width: "100%", height: 420, background: "#fff", borderRadius: 10, border: "1px solid #e5e5e5" },
     footer: { marginTop: 12, fontSize: 13, opacity: 0.8 },
+    dashboard: {
+        display: "flex",
+        justifyContent: "space-around",
+        gap: 20,
+        padding: "28px 40px",
+        background: "#0b0b0d",
+        borderRadius: 32,
+        boxShadow: "0 25px 60px rgba(0, 0, 0, 0.35)",
+        border: "1px solid rgba(255,255,255,0.04)",
+        color: "#fff",
+        flexWrap: "wrap",
+    },
+    gauge: { flex: "1 1 280px", textAlign: "center", position: "relative", minWidth: 260 },
+    gaugeLabel: { fontSize: 12, letterSpacing: 2, textTransform: "uppercase", opacity: 0.7, marginBottom: 6 },
+    gaugeValue: { fontSize: 38, fontWeight: 700 },
+    gaugeUnit: { fontSize: 11, opacity: 0.6, letterSpacing: 2 },
     speedToast: {
         position: "fixed",
         top: 18,
@@ -679,17 +836,11 @@ const styles: Record<string, React.CSSProperties> = {
         padding: "16px 22px 20px",
         boxShadow: "0 18px 35px rgba(0, 0, 0, 0.55)",
         backdropFilter: "blur(6px)",
+        overflow: "visible",
     },
     pedalBoardLabel: { color: "#9fa0a3", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", marginBottom: 10 },
-    pedalRow: { display: "flex", gap: 20 },
-    pedalUnit: { display: "flex", flexDirection: "column", alignItems: "center", gap: 6 },
-    pedalHinge: {
-        width: 76,
-        height: 12,
-        borderRadius: 6,
-        background: "linear-gradient(180deg, #5e5e5e, #2c2c2c)",
-        boxShadow: "inset 0 1px 2px rgba(255, 255, 255, 0.25)",
-    },
+    pedalRow: { display: "flex", gap: 32 },
+    pedalUnit: { display: "flex", flexDirection: "column", alignItems: "center", gap: 0 },
     pedalBase: {
         width: 72,
         height: 150,
@@ -700,9 +851,10 @@ const styles: Record<string, React.CSSProperties> = {
         boxShadow: "inset -4px -8px 14px rgba(255, 255, 255, 0.08)",
         display: "flex",
         alignItems: "flex-end",
-        transition: "transform 0.15s ease",
+        transition: "transform 0.3s ease",
+        position: "relative",
+        overflow: "visible",
     },
-    pedalBasePressed: { transform: "translateY(2px)" },
     pedalSurface: {
         width: "100%",
         height: "65%",
@@ -712,13 +864,34 @@ const styles: Record<string, React.CSSProperties> = {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        transition: "transform 0.12s ease, box-shadow 0.12s ease",
-    },
-    pedalSurfacePressed: {
-        transform: "translateY(14px)",
-        boxShadow: "0 3px 6px rgba(0, 0, 0, 0.45)",
-        background: "linear-gradient(180deg, #2d2d2d, #0d0d0d)",
+        transition: "transform 0.3s ease, box-shadow 0.3s ease",
+        position: "relative",
+        zIndex: 2,
     },
     pedalSurfaceBrake: { background: "linear-gradient(180deg, #642525, #1f0c0c)" },
     pedalText: { color: "#efefef", fontSize: 12, fontWeight: 700, letterSpacing: 1 },
+    pedalMetal: {
+        position: "absolute",
+        top: -140,
+        left: "50%",
+        transform: "translateX(-50%)",
+        width: 14,
+        height: 260,
+        borderRadius: 7,
+        background: "linear-gradient(180deg, #d6d6d6, #7b7b7b)",
+        boxShadow: "0 4px 10px rgba(0, 0, 0, 0.4)",
+        transition: "transform 0.3s ease",
+        zIndex: 1,
+    },
+    pedalMetalBrake: { background: "linear-gradient(180deg, #f7b9b9, #873030)" },
+    infoOverlay: {
+        position: "fixed",
+        right: 18,
+        bottom: 24,
+        width: 260,
+        fontSize: 11,
+        lineHeight: 1.4,
+        opacity: 0.7,
+        textAlign: "right",
+    },
 };
